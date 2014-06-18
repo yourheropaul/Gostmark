@@ -17,24 +17,6 @@ import (
 const __POSTMARK_URL__ string = "https://api.postmarkapp.com/email"
 const __VERSION__ string = "0.1"
 
-type PMMail struct {
-	userAgent string
-	apiKey    string
-
-	customHeaders []header
-	attachments   []attachment
-
-	Sender   string
-	ReplyTo  string
-	To       string
-	CC       string
-	BCC      string
-	Subject  string
-	Tag      string
-	HTMLBody string
-	TextBody string
-}
-
 type header struct {
 	Name  string
 	Value string
@@ -54,11 +36,30 @@ type Reply struct {
 	To          string
 }
 
+type PMMail struct {
+	userAgent string
+	apiKey    string
+
+	customHeaders []header
+	attachments   []attachment
+
+	Sender   string
+	ReplyTo  string
+	To       string
+	CC       string
+	BCC      string
+	Subject  string
+	Tag      string
+	HTMLBody string
+	TextBody string
+}
+
 // Create a new PMMail struct with
 // an Postmark API key, and return a
 // pointer to it
 func CreatePMMail(apikey string) *PMMail {
-	pmmail := &PMMail{apiKey: apikey}
+	pmmail := new(PMMail)
+	pmmail.apiKey = apikey
 	pmmail.userAgent = fmt.Sprintf("Go (Go postmark package library version %f)", __VERSION__)
 
 	return pmmail
@@ -73,38 +74,36 @@ func (p *PMMail) AddCustomHeader(name, value string) {
 	p.customHeaders = append(p.customHeaders, h)
 }
 
-// Add a file attachment by file path
+// Add a fileName attachment by fileName path
 // Most shamefully inspired by
 // https://github.com/gcmurphy/postmark/blob/master/message.go
-func (p *PMMail) AddAttachment(file string) error {
-	fileInfo, err := os.Stat(file)
+func (p *PMMail) AddAttachment(fileName string) error {
+	fileNameInfo, err := os.Stat(fileName)
 	if err != nil {
 		return err
 	}
-	if fileInfo.Size() > int64(10e6) {
-		return fmt.Errorf("File size %d exceeds 10MB limit.", fileInfo.Size())
+	if fileNameInfo.Size() > int64(10e6) {
+		return fmt.Errorf("FileName size %d exceeds 10MB limit.", fileNameInfo.Size())
 	}
 
-	fileHandle, err := os.Open(file)
+	fileNameHandle, err := os.Open(fileName)
+	if err != nil {
+		return err
+	}
+	defer fileNameHandle.Close()
+
+	content, err := ioutil.ReadAll(fileNameHandle)
 	if err != nil {
 		return err
 	}
 
-	content, err := ioutil.ReadAll(fileHandle)
-	if err != nil {
-		fileHandle.Close()
-		return err
-	} else {
-		fileHandle.Close()
-	}
-
-	mimeType := mime.TypeByExtension(path.Ext(file))
+	mimeType := mime.TypeByExtension(path.Ext(fileName))
 	if len(mimeType) == 0 {
 		mimeType = "application/octet-stream"
 	}
 
 	a := attachment{
-		Name:        fileInfo.Name(),
+		Name:        fileNameInfo.Name(),
 		Content:     base64.StdEncoding.EncodeToString(content),
 		ContentType: mimeType,
 	}
@@ -130,7 +129,10 @@ func (p *PMMail) checkValues() error {
 	return nil
 }
 
-func (p *PMMail) createJsonMessagePacket() ([]byte, error) {
+// Returns the compiled Postmark API
+// formatted JSON packet to send to
+// Postmark
+func (p *PMMail) MessageAsJSONPacket() ([]byte, error) {
 	if err := p.checkValues(); err != nil {
 		return []byte{}, err
 	}
@@ -176,24 +178,11 @@ func (p *PMMail) createJsonMessagePacket() ([]byte, error) {
 	return json.Marshal(json_interface)
 }
 
-// Returns the compiled Postmark API
-// formatted JSON packet to send to
-// Postmark
-func (p *PMMail) MessageAsJSONPacket() ([]byte, error) {
-	if json_message, err := p.createJsonMessagePacket(); err != nil {
-		return []byte{}, err
-	} else {
-		return json_message, nil
-	}
-}
-
 // Attempts to send the email by connecting to
 // Postmark's servers and sending the
 // formatted JSON packet
 func (p *PMMail) Send() (*Reply, error) {
-
 	data, err := p.MessageAsJSONPacket()
-
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +203,7 @@ func (p *PMMail) Send() (*Reply, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer response.Body.Close()
 
 	switch {
 	case response.StatusCode == 401:
@@ -228,7 +218,6 @@ func (p *PMMail) Send() (*Reply, error) {
 
 	var body bytes.Buffer
 	_, err = io.Copy(&body, response.Body)
-	response.Body.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -236,14 +225,10 @@ func (p *PMMail) Send() (*Reply, error) {
 	reply := new(Reply)
 	json.Unmarshal([]byte(body.String()), reply)
 
-	if err != nil {
-		return nil, err
-	}
-
 	if reply.ErrorCode != 0 {
 		return reply, fmt.Errorf("Error Code: %d", reply.ErrorCode)
 	}
 
-	// Send
+	// Sent
 	return reply, nil
 }
